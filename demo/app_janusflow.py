@@ -1,5 +1,6 @@
 import gradio as gr
 import torch
+from transformers import BitsAndBytesConfig
 from janus.janusflow.models import MultiModalityCausalLM, VLChatProcessor
 from PIL import Image
 from diffusers.models import AutoencoderKL
@@ -8,14 +9,28 @@ import numpy as np
 cuda_device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Load model and processor
-model_path = "deepseek-ai/JanusFlow-1.3B"
+model_path = "C:\\Users\\PC_LUNA\\Documents\\mmllm\\Janus\\JanusFlow-1.3B"
+
 vl_chat_processor = VLChatProcessor.from_pretrained(model_path)
 tokenizer = vl_chat_processor.tokenizer
 
-vl_gpt = MultiModalityCausalLM.from_pretrained(model_path)
-vl_gpt = vl_gpt.to(torch.bfloat16).to(cuda_device).eval()
+quant_config = BitsAndBytesConfig(
+    load_in_4bit=True,  # Use 4-bit quantization
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+)
 
-# remember to use bfloat16 dtype, this vae doesn't work with fp16
+quant_config_stb= BitsAndBytesConfig(
+    load_in_4bit=True,  # Use 4-bit quantization
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+)
+vl_gpt = MultiModalityCausalLM.from_pretrained(model_path,  quantization_config=quant_config, device_map = "auto")
+vl_gpt = vl_gpt.eval()
+
+# remember to use float16 dtype, this vae doesn't work with fp16
 vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-vae")
 vae = vae.to(torch.bfloat16).to(cuda_device).eval()
 
@@ -41,9 +56,10 @@ def multimodal_understanding(image, question, seed, top_p, temperature):
     ]
     
     pil_images = [Image.fromarray(image)]
+
     prepare_inputs = vl_chat_processor(
         conversations=conversation, images=pil_images, force_batchify=True
-    ).to(cuda_device, dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float16)
+    ).to(cuda_device, dtype=torch.float16)
     
     
     inputs_embeds = vl_gpt.prepare_inputs_embeds(**prepare_inputs)
@@ -72,29 +88,32 @@ def generate(
     cfg_weight: float = 2.0,
     num_inference_steps: int = 30
 ):
-    # we generate 5 images at a time, *2 for CFG
-    tokens = torch.stack([input_ids] * 10).cuda()
-    tokens[5:, 1:] = vl_chat_processor.pad_id
+    # We generate 1 image at a time, *2 for CFG
+    tokens = torch.stack([input_ids] * 2).cuda()
+    tokens[1:, 1:] = vl_chat_processor.pad_id  # Mask second copy for CFG
+
     inputs_embeds = vl_gpt.language_model.get_input_embeddings()(tokens)
     print(inputs_embeds.shape)
 
-    # we remove the last <bog> token and replace it with t_emb later
-    inputs_embeds = inputs_embeds[:, :-1, :] 
-    
-    # generate with rectified flow ode
-    # step 1: encode with vision_gen_enc
-    z = torch.randn((5, 4, 48, 48), dtype=torch.bfloat16).cuda()
-    
+    # Remove the last <bog> token and replace it with t_emb later
+    inputs_embeds = inputs_embeds[:, :-1, :]
+
+    # Generate with rectified flow ODE
+    # Step 1: Encode with vision_gen_enc
+    z = torch.randn((1, 4, 48, 48), dtype=torch.float16).cuda()  # 1 image instead of 5
+
     dt = 1.0 / num_inference_steps
-    dt = torch.zeros_like(z).cuda().to(torch.bfloat16) + dt
-    
-    # step 2: run ode
-    attention_mask = torch.ones((10, inputs_embeds.shape[1]+577)).to(vl_gpt.device)
-    attention_mask[5:, 1:inputs_embeds.shape[1]] = 0
+    dt = torch.zeros_like(z).cuda().to(torch.float16) + dt
+
+    # Step 2: Run ODE
+    attention_mask = torch.ones((2, inputs_embeds.shape[1] + 577)).to(vl_gpt.device)
+    attention_mask[1:, 1:inputs_embeds.shape[1]] = 0
     attention_mask = attention_mask.int()
+
     for step in range(num_inference_steps):
-        # prepare inputs for the llm
-        z_input = torch.cat([z, z], dim=0) # for cfg
+        print("Step:",step,"/",num_inference_steps)
+        # Prepare inputs for the LLM
+        z_input = torch.cat([z, z], dim=0)  # for CFG
         t = step / num_inference_steps * 1000.
         t = torch.tensor([t] * z_input.shape[0]).to(dt)
         z_enc = vl_gpt.vision_gen_enc_model(z_input, t)
@@ -103,8 +122,7 @@ def generate(
         z_emb = vl_gpt.vision_gen_enc_aligner(z_emb)
         llm_emb = torch.cat([inputs_embeds, t_emb.unsqueeze(1), z_emb], dim=1)
 
-        # input to the llm
-        # we apply attention mask for CFG: 1 for tokens that are not masked, 0 for tokens that are masked.
+        # Input to the LLM
         if step == 0:
             outputs = vl_gpt.language_model.model(inputs_embeds=llm_emb, 
                                              use_cache=True, 
@@ -114,30 +132,47 @@ def generate(
             for kv_cache in past_key_values:
                 k, v = kv_cache[0], kv_cache[1]
                 past_key_values.append((k[:, :, :inputs_embeds.shape[1], :], v[:, :, :inputs_embeds.shape[1], :]))
-            past_key_values = tuple(past_key_values)
+            past_key_values = past_key_values
         else:
             outputs = vl_gpt.language_model.model(inputs_embeds=llm_emb, 
                                              use_cache=True, 
                                              attention_mask=attention_mask,
                                              past_key_values=past_key_values)
         hidden_states = outputs.last_hidden_state
-        
-        # transform hidden_states back to v
+
+        # Transform hidden_states back to v
         hidden_states = vl_gpt.vision_gen_dec_aligner(vl_gpt.vision_gen_dec_aligner_norm(hidden_states[:, -576:, :]))
         hidden_states = hidden_states.reshape(z_emb.shape[0], 24, 24, 768).permute(0, 3, 1, 2)
         v = vl_gpt.vision_gen_dec_model(hidden_states, hs, t_emb)
         v_cond, v_uncond = torch.chunk(v, 2)
-        v = cfg_weight * v_cond - (cfg_weight-1.) * v_uncond
+        v = cfg_weight * v_cond - (cfg_weight - 1.) * v_uncond
         z = z + dt * v
-        
-    # step 3: decode with vision_gen_dec and sdxl vae
-    decoded_image = vae.decode(z / vae.config.scaling_factor).sample
-    
+
+    # Step 3: Decode with vision_gen_dec and sdxl vae
+    decoded_image = vae.decode(torch.tensor(z / vae.config.scaling_factor, dtype=torch.bfloat16)).sample
+
     images = decoded_image.float().clip_(-1., 1.).permute(0,2,3,1).cpu().numpy()
-    images = ((images+1) / 2. * 255).astype(np.uint8)
-    
-    return images
-    
+
+    # Normalization and scaling
+    images = (images + 1) / 2. * 255
+
+    # Diagnostic: check for NaN or Inf values
+    if np.isnan(images).any():
+        print("❌ Error: The 'images' matrix contains NaN.")
+    if np.isinf(images).any():
+        print("❌ Error: The 'images' matrix contains Inf values.")
+
+    # Print stats
+    print("🔍 Min:", np.min(images), "Max:", np.max(images))
+
+    # Replace NaN or Inf values with valid ones
+    images = np.nan_to_num(images, nan=0.0, posinf=255, neginf=0.0)
+
+    # Final clamping and conversion
+    images = np.clip(images, 0, 255).astype(np.uint8)
+
+    return images  # Return only one image
+
 def unpack(dec, width, height, parallel_size=5):
     dec = dec.to(torch.float32).cpu().numpy().transpose(0, 2, 3, 1)
     dec = np.clip((dec + 1) / 2 * 255, 0, 255)
@@ -212,8 +247,8 @@ with gr.Blocks() as demo:
     
     
     with gr.Row():
-        cfg_weight_input = gr.Slider(minimum=1, maximum=10, value=2, step=0.5, label="CFG Weight")
-        step_input = gr.Slider(minimum=1, maximum=50, value=30, step=1, label="Number of Inference Steps")
+        cfg_weight_input = gr.Slider(minimum=1, maximum=20, value=2, step=0.5, label="CFG Weight")
+        step_input = gr.Slider(minimum=1, maximum=150, value=30, step=1, label="Number of Inference Steps")
 
     prompt_input = gr.Textbox(label="Prompt")
     seed_input = gr.Number(label="Seed (Optional)", precision=0, value=12345)
@@ -244,4 +279,4 @@ with gr.Blocks() as demo:
         outputs=image_output
     )
 
-demo.launch(share=True)
+demo.launch(share=False)

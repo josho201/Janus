@@ -19,10 +19,12 @@
 
 from .image_processing_vlm import VLMImageProcessor
 from .modeling_vlm import MultiModalityCausalLM
+from .modeling_vlm import MultiModalityConfig
 from .processing_vlm import VLChatProcessor
 
 __all__ = [
     "VLMImageProcessor",
     "VLChatProcessor",
     "MultiModalityCausalLM",
+    "MultiModalityConfig"
 ]

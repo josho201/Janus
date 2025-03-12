@@ -20,7 +20,7 @@ vl_gpt = AutoModelForCausalLM.from_pretrained(model_path,
                                              language_config=language_config,
                                              trust_remote_code=True)
 if torch.cuda.is_available():
-    vl_gpt = vl_gpt.to(torch.bfloat16).cuda()
+    vl_gpt = vl_gpt.to(torch.float16).cuda()
 else:
     vl_gpt = vl_gpt.to(torch.float16)
 
@@ -52,7 +52,7 @@ def multimodal_understanding(image, question, seed, top_p, temperature):
     pil_images = [Image.fromarray(image)]
     prepare_inputs = vl_chat_processor(
         conversations=conversation, images=pil_images, force_batchify=True
-    ).to(cuda_device, dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float16)
+    ).to(cuda_device, dtype=torch.float16 if torch.cuda.is_available() else torch.float16)
     
     
     inputs_embeds = vl_gpt.prepare_inputs_embeds(**prepare_inputs)

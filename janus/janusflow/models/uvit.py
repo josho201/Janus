@@ -333,13 +333,14 @@ class Upsample2D(nn.Module):
         if self.use_conv_transpose:
             return self.conv(hidden_states)
 
-        # Cast to float32 to as 'upsample_nearest2d_out_frame' op does not support bfloat16
+        # Cast to float32 to as 'upsample_nearest2d_out_frame' op does not support float16
         # TODO(Suraj): Remove this cast once the issue is fixed in PyTorch
         # https://github.com/pytorch/pytorch/issues/86679
+        """
         dtype = hidden_states.dtype
-        if dtype == torch.bfloat16:
-            hidden_states = hidden_states.to(torch.float32)
-
+        if dtype == torch.float16:
+            hidden_states = hidden_states.to(torch.float32) 
+        """
         # upsample_nearest_nhwc fails with large batch sizes. see https://github.com/huggingface/diffusers/issues/984
         if hidden_states.shape[0] >= 64:
             hidden_states = hidden_states.contiguous()
@@ -356,10 +357,11 @@ class Upsample2D(nn.Module):
                     hidden_states, size=output_size, mode="nearest"
                 )
 
-        # If the input is bfloat16, we cast back to bfloat16
-        if dtype == torch.bfloat16:
+        # If the input is float16, we cast back to float16
+        """
+        if dtype == torch.float16:
             hidden_states = hidden_states.to(dtype)
-
+        """
         # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
         if self.use_conv:
             if self.name == "conv":

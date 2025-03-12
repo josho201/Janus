@@ -148,7 +148,7 @@ tokenizer = vl_chat_processor.tokenizer
 vl_gpt: MultiModalityCausalLM = AutoModelForCausalLM.from_pretrained(
     model_path, trust_remote_code=True
 )
-vl_gpt = vl_gpt.to(torch.bfloat16).cuda().eval()
+vl_gpt = vl_gpt.to(torch.float16).cuda().eval()
 
 conversation = [
     {
@@ -203,7 +203,7 @@ tokenizer = vl_chat_processor.tokenizer
 vl_gpt: MultiModalityCausalLM = AutoModelForCausalLM.from_pretrained(
     model_path, trust_remote_code=True
 )
-vl_gpt = vl_gpt.to(torch.bfloat16).cuda().eval()
+vl_gpt = vl_gpt.to(torch.float16).cuda().eval()
 
 conversation = [
     {
@@ -334,7 +334,7 @@ tokenizer = vl_chat_processor.tokenizer
 vl_gpt: MultiModalityCausalLM = AutoModelForCausalLM.from_pretrained(
     model_path, trust_remote_code=True
 )
-vl_gpt = vl_gpt.to(torch.bfloat16).cuda().eval()
+vl_gpt = vl_gpt.to(torch.float16).cuda().eval()
 
 conversation = [
     {
@@ -389,7 +389,7 @@ tokenizer = vl_chat_processor.tokenizer
 vl_gpt: MultiModalityCausalLM = AutoModelForCausalLM.from_pretrained(
     model_path, trust_remote_code=True
 )
-vl_gpt = vl_gpt.to(torch.bfloat16).cuda().eval()
+vl_gpt = vl_gpt.to(torch.float16).cuda().eval()
 
 conversation = [
     {
@@ -534,7 +534,7 @@ tokenizer = vl_chat_processor.tokenizer
 vl_gpt = MultiModalityCausalLM.from_pretrained(
     model_path, trust_remote_code=True
 )
-vl_gpt = vl_gpt.to(torch.bfloat16).cuda().eval()
+vl_gpt = vl_gpt.to(torch.float16).cuda().eval()
 
 conversation = [
     {
@@ -589,12 +589,12 @@ tokenizer = vl_chat_processor.tokenizer
 vl_gpt = MultiModalityCausalLM.from_pretrained(
     model_path, trust_remote_code=True
 )
-vl_gpt = vl_gpt.to(torch.bfloat16).cuda().eval()
+vl_gpt = vl_gpt.to(torch.float16).cuda().eval()
 
 from diffusers.models import AutoencoderKL
-# remember to use bfloat16 dtype, this vae doesn't work with fp16
+# remember to use float16 dtype, this vae doesn't work with fp16
 vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-vae")
-vae = vae.to(torch.bfloat16).cuda().eval()
+vae = vae.to(torch.float16).cuda().eval()
 
 conversation = [
     {
@@ -633,10 +633,10 @@ def generate(
     
     # generate with rectified flow ode
     # step 1: encode with vision_gen_enc
-    z = torch.randn((batchsize, 4, 48, 48), dtype=torch.bfloat16).cuda()
+    z = torch.randn((batchsize, 4, 48, 48), dtype=torch.float16).cuda()
     
     dt = 1.0 / num_inference_steps
-    dt = torch.zeros_like(z).cuda().to(torch.bfloat16) + dt
+    dt = torch.zeros_like(z).cuda().to(torch.float16) + dt
     
     # step 2: run ode
     attention_mask = torch.ones((2*batchsize, inputs_embeds.shape[1]+577)).to(vl_gpt.device)
